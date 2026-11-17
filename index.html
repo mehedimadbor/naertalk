@@ -44,7 +44,7 @@ small{color:var(--mut)}
 <main id="setup">
   <div class="card">
     <b>Internet ছাড়া চ্যাট</b>
-    <p>দুই ফোন একই Wi-Fi বা একটির Hotspot-এ থাকলেই হবে। একজন Host, অন্যজন Join করবে।</p>
+    <p>দুই ফোন একই Wi-Fi বা একটির Hotspot-এ থাকলেই হবে। একজন Host, অন্যজন Join করবে। পেজটি সরাসরি Chrome-এ খুলুন এবং Mic/Camera Allow দিন।</p>
     <div class="row"><button id="bh">Host</button><button id="bj" class="o">Join</button></div>
   </div>
   <div id="pair" class="card hide">
@@ -52,7 +52,7 @@ small{color:var(--mut)}
     <p id="pdesc"></p>
     <div id="qr" class="hide"></div>
     <textarea id="code" aria-label="Pairing code" placeholder="Code"></textarea>
-    <div class="row" style="margin-top:10px"><button id="cp" class="o">Copy code</button><button id="sc" class="o">Scan QR</button><button id="ap" class="g">Apply</button></div>
+    <div class="row" style="margin-top:10px"><button id="cp" class="o">Copy</button><button id="pa" class="o">Paste</button><button id="sc" class="o">Scan QR</button><button id="ap" class="g">Apply</button></div>
     <video id="vid" class="hide" playsinline muted></video>
   </div>
 </main>
@@ -73,14 +73,17 @@ small{color:var(--mut)}
 <script>
 const $=id=>document.getElementById(id);
 let pc,dc,mode,buf={};
-const enc=o=>btoa(unescape(encodeURIComponent(JSON.stringify(o))));
-const dec=s=>JSON.parse(decodeURIComponent(escape(atob(s.trim()))));
+const enc=d=>{const L=d.sdp.split(/\r?\n/),g=k=>(L.find(l=>l.startsWith(k))||'').slice(k.length);
+  const all=L.filter(l=>l.startsWith('a=candidate:')&&l.split(' ')[2].toLowerCase()==='udp');
+  let c=all.filter(l=>!l.split(' ')[4].includes(':'));if(!c.length)c=all;
+  return btoa(JSON.stringify({t:d.type[0],u:g('a=ice-ufrag:'),p:g('a=ice-pwd:'),f:g('a=fingerprint:sha-256 '),s:g('a=setup:'),c:c.map(l=>l.slice(12))}))};
+const dec=s=>{const o=JSON.parse(atob(s.trim()));return{type:o.t==='o'?'offer':'answer',sdp:['v=0','o=- 1 2 IN IP4 127.0.0.1','s=-','t=0 0','a=group:BUNDLE 0','a=msid-semantic: WMS','m=application 9 UDP/DTLS/SCTP webrtc-datachannel','c=IN IP4 0.0.0.0','a=ice-ufrag:'+o.u,'a=ice-pwd:'+o.p,'a=fingerprint:sha-256 '+o.f,'a=setup:'+o.s,'a=mid:0','a=sctp-port:5000','a=max-message-size:262144',...o.c.map(x=>'a=candidate:'+x),'a=end-of-candidates',''].join('\r\n')}};
 const setSt=(t,on)=>{$('st').textContent=t;$('st').className='pill'+(on?' on':'')};
 
-async function mic(){try{(await navigator.mediaDevices.getUserMedia({audio:true})).getTracks().forEach(t=>t.stop())}catch(e){}}
+let micOk=false;async function mic(){try{const s=await Promise.race([navigator.mediaDevices.getUserMedia({audio:true}),new Promise((_,j)=>setTimeout(j,15000))]);s.getTracks().forEach(t=>t.stop());micOk=true}catch(e){}}
 function mk(){
   pc=new RTCPeerConnection({iceServers:[]});
-  pc.onconnectionstatechange=()=>{if(['failed','disconnected','closed'].includes(pc.connectionState))setSt('Disconnected')};
+  pc.onconnectionstatechange=()=>{const s=pc.connectionState;if(s==='failed')setSt('Failed');else if(['disconnected','closed'].includes(s))setSt('Disconnected');if(s==='failed')alert('Connect হয়নি। দুই ফোন একই Wi-Fi/Hotspot-এ আছে কিনা দেখুন এবং Mic permission Allow দিয়ে আবার Host/Join করুন।')};
   pc.ondatachannel=e=>setup(e.channel);
 }
 function setup(c){
@@ -95,10 +98,11 @@ const gather=()=>new Promise(r=>{
   setTimeout(r,4000);
 });
 function showCode(){
+  if(/\.local/.test(pc.localDescription.sdp))alert('Mic permission Allow দিন, নাহলে অন্য ফোন connect হবে না। পেজটি সরাসরি Chrome-এ খুলুন।');
   const c=enc(pc.localDescription);
   $('code').value=c;
   const q=$('qr');q.innerHTML='';q.classList.remove('hide');
-  try{new QRCode(q,{text:c,width:260,height:260,correctLevel:QRCode.CorrectLevel.L})}catch(e){q.classList.add('hide')}
+  try{new QRCode(q,{text:c,width:280,height:280,correctLevel:QRCode.CorrectLevel.L})}catch(e){q.classList.add('hide')}
 }
 function step(t,d){$('pair').classList.remove('hide');$('ptitle').textContent=t;$('pdesc').textContent=d}
 
@@ -109,9 +113,10 @@ $('bh').onclick=async()=>{
   step('Step 1: Show this to the other phone','অন্য ফোনে Join চেপে এই QR স্ক্যান করুন বা code পাঠান। তারপর তার answer code এখানে Scan/Paste করে Apply চাপুন।');
   showCode();setSt('Waiting for answer');
 };
-$('bj').onclick=()=>{
+$('bj').onclick=async()=>{
   mode='join';mk();$('qr').classList.add('hide');$('code').value='';
   step('Step 1: Get the Host code','Host ফোনের QR স্ক্যান করুন বা code paste করে Apply চাপুন।');
+  await mic();
 };
 $('ap').onclick=async()=>{
   const v=$('code').value.trim();if(!v)return;
@@ -119,15 +124,16 @@ $('ap').onclick=async()=>{
     stopScan();
     if(mode==='host'){await pc.setRemoteDescription(dec(v));setSt('Connecting…')}
     else{
-      await mic();
+      setSt('Creating answer…');
       await pc.setRemoteDescription(dec(v));
       await pc.setLocalDescription(await pc.createAnswer());await gather();
       step('Step 2: Show this to the Host','Host ফোনে এই QR স্ক্যান করান বা code পাঠান, তারপর Host-এ Apply চাপুন।');
       showCode();setSt('Waiting for Host');
     }
-  }catch(e){alert('Invalid code. Try again.')}
+  }catch(e){setSt('Error');alert('Error: '+(e.message||e)+'\nCode পুরোটা ঠিকমতো copy/scan হয়েছে কিনা দেখুন, দরকারে Join আবার চাপুন।')}
 };
 $('cp').onclick=()=>{$('code').select();navigator.clipboard&&navigator.clipboard.writeText($('code').value).catch(()=>{})};
+$('pa').onclick=async()=>{try{$('code').value=await navigator.clipboard.readText()}catch(e){$('code').focus()}};
 
 let stream,raf;
 $('sc').onclick=async()=>{
@@ -141,7 +147,7 @@ $('sc').onclick=async()=>{
         if(r){$('code').value=r.data;stopScan();$('ap').click();return}}
       raf=requestAnimationFrame(tick)};
     tick();
-  }catch(e){alert('Camera not available. Paste the code instead.')}
+  }catch(e){alert('Camera চালু হয়নি ('+e.name+')। পেজটি Chrome-এ সরাসরি খুলে Camera Allow দিন, অথবা Copy/Paste করুন।')}
 };
 function stopScan(){cancelAnimationFrame(raf);stream&&stream.getTracks().forEach(t=>t.stop());stream=null;$('vid').classList.add('hide')}
 
